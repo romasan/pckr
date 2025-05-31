@@ -1,0 +1,298 @@
+const { MessageBuilder, MyTeamSDK } = require('myteam-bot-sdk');
+// const fetch = require("node-fetch");
+const fs = require('fs');
+const util = require('util');
+const {
+    formatNum,
+    formatDuration,
+    parseBet,
+    calc,
+} = require('./utils');
+require("dotenv").config();
+
+const readDirPromise = util.promisify(fs.readdir);
+
+const {
+    VKTEAMS_TOKEN,
+    VKTEAMS_API_URL,
+    MASTER_CHAT_ID,
+} = process.env;
+
+const now = Date.now() + 1000;
+const skip = {};
+let current = '';
+let bets = {};
+
+const chatsFilePath = __dirname + '/chats.log';
+const historyFilePath = __dirname + '/history.log';
+
+if (!fs.existsSync(chatsFilePath)) {
+    fs.writeFileSync(chatsFilePath, '');
+}
+
+if (!fs.existsSync(historyFilePath)) {
+    fs.writeFileSync(historyFilePath, '');
+}
+
+let IDs = fs.readFileSync(chatsFilePath)
+    .toString()
+    .split('\n')
+    .filter(Boolean)
+    .reduce((list, item) => (list.includes(item) ? list : [...list, item]), []);
+
+const chatsFile = fs.createWriteStream(chatsFilePath, { flags : 'a' });
+const historyFile = fs.createWriteStream(historyFilePath, { flags : 'a' });
+
+const spam = (sdk, text) => {
+    IDs.forEach((chatId) => {
+        sdk.sendText(chatId, text);
+    });
+};
+
+const start = async ({ sdk, chatId, type }) => {
+    const prefix = 'Привет, я помогу в оценке задачек.';
+    const text = current
+        ? `${prefix}\nСейчас нужно твоё мнение по задачке:\n${current}`
+        : `${prefix}\nСейчас нет задачек которые бы требовали оценки.`;
+
+    setTimeout(() => {
+        sdk.sendText(chatId, text);
+    }, 1000);
+
+    if (!IDs.includes(chatId)) {
+        IDs.push(chatId);
+        chatsFile.write(chatId + '\n');
+        sdk.sendText(MASTER_CHAT_ID, `⚙️ Новый участник: ${chatId}`);
+    }
+};
+
+const help = async ({ sdk, chatId, context }) => {
+    const isOwner = chatId === MASTER_CHAT_ID;
+
+    if (isOwner) {
+        sdk.sendText(chatId, `⚙️ команды для модерации:
+/new - новая задачка на оценку
+/end - закончить оценку
+/list - список оценок по текущей задачке
+/history - последние голосования
+/members - список участников`);
+    }
+};
+
+const history = async ({ sdk, chatId, context }) => {
+    let index = isNaN(parseInt(context)) ? -1 : parseInt(context);
+    const history = fs.readFileSync(historyFilePath)
+        .toString()
+        .split('\n')
+        .filter(Boolean);
+
+    if (index < 0) {
+        index = history.length - 1;
+    }
+
+    try {
+        const json = JSON.parse(history[index])
+
+        sdk.sendText(chatId, `⚙️ Task #${index} of ${history.length}\n\`\`\`\n${JSON.stringify(json, null, 2)}\n\`\`\``);
+    } catch (error) {
+        sdk.sendText(chatId, `⚙️ Error: ${error}`);
+    }
+};
+
+const list = ({ sdk, chatId, context }) => {
+    sdk.sendText(
+        chatId,
+        '⚙️ Список оценок:\n' + (Object.entries(bets)
+            .map(([chatId, value]) => `[${chatId}]: ${formatDuration(value, true)}`)
+            .join('\n') ||
+        'Пока никто не проголосовал')
+    );
+};
+
+const add = async ({ sdk, chatId, context }) => {
+    if (!context) {
+        sdk.sendText(chatId, `⚙️ Ошибка: пустой запрос`);
+
+        return;
+    }
+
+    current = context;
+    bets = {};
+
+    spam(sdk, `🫵 Нужна твоя оценка по задачке:\n${context}`);
+};
+
+const fin = async ({ sdk, chatId, context }) => {
+    if (!current) {
+        sdk.sendText(chatId, `⚙️ Ошибка: пустой запрос`);
+
+        return;
+    }
+    const { count, mid, med } = calc(bets);
+    const total = IDs.length;
+
+    spam(sdk, `✅ Вот и оценили задачку:\n${current}\n\nПроголосовали ${count} из ${total}\n\nСредняя арифметическая оценка: ${formatDuration(mid)}\nМедианная оценка: ${formatDuration(med)}`);
+
+    historyFile.write(JSON.stringify({
+        task: current,
+        bets,
+        count,
+        total: Object.keys(IDs).length,
+        mid,
+        med,
+    }) + '\n');
+
+    current = '';
+    bets = {};
+};
+
+const members = async ({ sdk, chatId, context }) => {
+    sdk.sendText(chatId, '⚙️ Участники оценки:\n' + IDs.join('\n'));
+};
+
+const kick = ({ sdk, chatId, context }) => {
+    if (!IDs.includes(context)) {
+        sdk.sendText(chatId, `⚙️ Нет такого участника: "${context}"`);
+
+        return;
+    }
+
+    IDs = IDs.filter((item) => item !== context).filter(Boolean);
+    fs.writeFileSync(chatsFilePath, IDs.join('\n') + '\n');
+    sdk.sendText(chatId, `⚙️ Участник [${context}] удалён из рассылки.\nСписок участников:\n${IDs.join('\n')}`);
+};
+
+const stop = async ({ sdk, chatId, context }) => {
+    IDs = IDs.filter((item) => item !== chatId).filter(Boolean);
+    fs.writeFileSync(chatsFilePath, IDs.join('\n') + '\n');
+    // sdk.sendText(MASTER_CHAT_ID, `⚙️ Участник [${context}] вышел из рассылки по команде /stop`);
+};
+
+const commands = {
+	start,
+	help,
+    stop,
+};
+
+const masterCommands = {
+    history,
+    new: add,
+    add,
+    fin,
+    close: fin,
+    end: fin,
+    list,
+    members,
+    kick,
+};
+
+const init = () => {
+	const sdk = new MyTeamSDK({ token: VKTEAMS_TOKEN, baseURL: VKTEAMS_API_URL });
+
+    console.log('Start chat bot', new Date());
+
+	sdk.on('newMessage', (event) => {
+		const {
+			text,
+			msgId,
+			chat: {
+				chatId,
+				type,
+			},
+			from: {
+				userId,
+			},
+		} = event.payload;
+
+        console.log(`MESSAGE [${chatId}] ${new Date()}: "${text}"`);
+
+        const isOwner = chatId === MASTER_CHAT_ID;
+        const isChatParticipant = IDs.includes(chatId);
+
+		try {
+			const postfix = Array(4).fill().map(() => parseInt(Math.random() * 10)).join('');
+
+			fs.writeFileSync(`${__dirname}/logs/${Date.now()}-${chatId}-${postfix}`, JSON.stringify(event.payload, null, 2));
+		} catch (ignore) {}
+
+		if (Date.now() <= now) {
+			console.log(`SKIP from: ${chatId}; text: ${text}`);
+
+			if (!skip[chatId]) {
+				// sdk.sendText(chatId, `Привет, я вернулся, если нужна моя помощь повтори сообщение`);
+			}
+
+			skip[chatId] = true;
+
+			return;
+		}
+
+		// const _text = text || event?.payload?.parts?.[0].payload?.message?.text || '';
+
+		const [, _command, context] = (text || '').match(/^\/(\w+) ?([\w\W]+)?/) || [];
+		const command = _command?.toLowerCase();
+	
+		if (commands[command]) {
+			commands[command]({ sdk, text, msgId, chatId, type, userId, context });
+
+			return;
+		}
+
+		if (isOwner && masterCommands[command]) {
+			masterCommands[command]({ sdk, text, msgId, chatId, type, userId, context });
+
+			return;
+		}
+
+        if (!isChatParticipant) {
+            // sdk.sendText(chatId, '/start - для участия в оценке задач');
+
+            return;
+        }
+
+        if (!current) {
+            sdk.sendText(chatId, 'Сейчас нет задачек которые бы требовали оценки.');
+
+            return;
+        }
+
+		const bet = parseBet(text || '');
+
+		if (bet) {
+            const { weeks, days, hours, totalHours } = bet;
+            const count = Object.keys(bets).length;
+            const total = IDs.length;
+
+            const inputDuration = `${weeks ? `${formatNum(weeks, ['неделя', 'недели', 'недель'])}` : ''}${days ? ` ${formatNum(days, ['день', 'дня', 'дней'])}` : ''}${hours ? ` ${formatNum(hours, ['час', 'часа', 'часов'])}` : ''}`.trim();
+            const formattedDuration = formatDuration(totalHours, true);
+            const duration = inputDuration === formattedDuration
+                ? inputDuration
+                : `${inputDuration} (${formattedDuration})`;
+
+            sdk.sendText(MASTER_CHAT_ID, `⚙️ [${chatId}] сделал оценку:\n${duration}\n${count} / ${total}`);
+
+            if (totalHours < 0 || totalHours > 1920) {
+                sdk.sendText(chatId, `👀 Какой-то странный срок:\n${duration}\nтакой ответ я не могу принять.`);
+
+                return;
+            }
+
+            bets[chatId] = totalHours;
+
+            sdk.sendText(chatId, `👍 Принял твою оценку:\n${duration}`);
+		} else {
+			sdk.sendText(chatId, `⛔ Не совсем тебя понял, я принимаю ответы в разных форматах, например:
+1w 2d 3h
+2d3h
+1w.2d.3h.
+1 неделя 2 дня 3 часа
+1н. 2д. 3ч.
+1 нед 2 дн 3 ч
+и т.д.`);
+		}
+	});
+	
+	sdk.listen();
+}
+
+init();

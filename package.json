@@ -1,0 +1,20 @@
+{
+  "name": "pckr",
+  "version": "0.0.1",
+  "scripts": {
+    "start": "pm2 start node index.js --name pckr",
+    "stop": "pm2 stop pckr && pm2 delete pckr",
+    "logs": "pm2 log",
+    "dev": "node index.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/romasan/pckr.git"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.3",
+    "myteam-bot-sdk": "^1.0.1",
+    "node-fetch": "^2.6.9",
+    "pm2": "^6.0.5"
+  }
+}

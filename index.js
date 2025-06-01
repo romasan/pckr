@@ -1,16 +1,15 @@
-const { MessageBuilder, MyTeamSDK } = require('myteam-bot-sdk');
-// const fetch = require("node-fetch");
+const { MyTeamSDK } = require('myteam-bot-sdk');
 const fs = require('fs');
-const util = require('util');
+
 const {
     formatNum,
     formatDuration,
     parseBet,
     calc,
+    shiftFormat,
+    contextMessage,
 } = require('./utils');
 require("dotenv").config();
-
-const readDirPromise = util.promisify(fs.readdir);
 
 const {
     VKTEAMS_TOKEN,
@@ -20,7 +19,7 @@ const {
 
 const now = Date.now() + 1000;
 const skip = {};
-let current = '';
+let current = null;
 let bets = {};
 
 const chatsFilePath = __dirname + '/chats.log';
@@ -52,7 +51,7 @@ const spam = (sdk, text) => {
 const start = async ({ sdk, chatId, type }) => {
     const prefix = 'Привет, я помогу в оценке задачек.';
     const text = current
-        ? `${prefix}\nСейчас нужно твоё мнение по задачке:\n${current}`
+        ? contextMessage(`${prefix}\nСейчас нужно твоё мнение по задачке:\n%s`, current)
         : `${prefix}\nСейчас нет задачек которые бы требовали оценки.`;
 
     setTimeout(() => {
@@ -109,20 +108,26 @@ const list = ({ sdk, chatId, context }) => {
     );
 };
 
-const add = async ({ sdk, chatId, context }) => {
+const add = async ({ sdk, chatId, format, command, context }) => {
     if (!context) {
         sdk.sendText(chatId, `⚙️ Ошибка: пустой запрос`);
 
         return;
     }
 
-    current = context;
+    format = shiftFormat(format, -(command.length + 2));
+    current = {
+        format,
+        context,
+    };
     bets = {};
 
-    spam(sdk, `🫵 Нужна твоя оценка по задачке:\n${context}`);
+    const message = contextMessage('🫵 Нужна твоя оценка по задачке:\n%s', current);
+
+    spam(sdk, message);
 };
 
-const fin = async ({ sdk, chatId, context }) => {
+const end = async ({ sdk, chatId, context }) => {
     if (!current) {
         sdk.sendText(chatId, `⚙️ Ошибка: пустой запрос`);
 
@@ -131,18 +136,22 @@ const fin = async ({ sdk, chatId, context }) => {
     const { count, mid, med } = calc(bets);
     const total = IDs.length;
 
-    spam(sdk, `✅ Вот и оценили задачку:\n${current}\n\nПроголосовали ${count} из ${total}\n\nСредняя арифметическая оценка: ${formatDuration(mid)}\nМедианная оценка: ${formatDuration(med)}`);
+    const message = contextMessage(`✅ Вот и оценили задачку:\n%s\n\nПроголосовали ${count} из ${total}\n\nСредняя арифметическая оценка: ${formatDuration(mid, true)}\nМедианная оценка: ${formatDuration(med, true)}\n\n${formatDuration(med, 'short')}`, current);
+    spam(sdk, message);
 
     historyFile.write(JSON.stringify({
-        task: current,
+        task: current.context
+            .replace('\n', ' ')
+            .trim(),
         bets,
         count,
         total: Object.keys(IDs).length,
         mid,
         med,
+        time: new Date().toGMTString(),
     }) + '\n');
 
-    current = '';
+    current = null;
     bets = {};
 };
 
@@ -175,13 +184,14 @@ const commands = {
 };
 
 const masterCommands = {
-    history,
-    new: add,
     add,
-    fin,
-    close: fin,
-    end: fin,
+    new: add,
+    end,
+    fin: end,
+    close: end,
     list,
+    history,
+    his: history,
     members,
     kick,
 };
@@ -189,11 +199,12 @@ const masterCommands = {
 const init = () => {
 	const sdk = new MyTeamSDK({ token: VKTEAMS_TOKEN, baseURL: VKTEAMS_API_URL });
 
-    console.log('Start chat bot', new Date());
+    console.log('Start chat bot', new Date().toGMTString());
 
 	sdk.on('newMessage', (event) => {
 		const {
 			text,
+            format,
 			msgId,
 			chat: {
 				chatId,
@@ -204,7 +215,9 @@ const init = () => {
 			},
 		} = event.payload;
 
-        console.log(`MESSAGE [${chatId}] ${new Date()}: "${text}"`);
+        // fs.writeFileSync(__dirname + '/last-msg.json', JSON.stringify(event.payload, null, 2));
+
+        console.log(`MESSAGE [${chatId}] ${new Date().toGMTString()}: "${text}"`);
 
         const isOwner = chatId === MASTER_CHAT_ID;
         const isChatParticipant = IDs.includes(chatId);
@@ -229,17 +242,17 @@ const init = () => {
 
 		// const _text = text || event?.payload?.parts?.[0].payload?.message?.text || '';
 
-		const [, _command, context] = (text || '').match(/^\/(\w+) ?([\w\W]+)?/) || [];
+		const [, _command, context] = (text || '').match(/^\/(\w+)[\s\n]?([\w\W]+)?/) || [];
 		const command = _command?.toLowerCase();
 	
 		if (commands[command]) {
-			commands[command]({ sdk, text, msgId, chatId, type, userId, context });
+			commands[command]({ sdk, text, msgId, chatId, type, userId, format, command, context });
 
 			return;
 		}
 
 		if (isOwner && masterCommands[command]) {
-			masterCommands[command]({ sdk, text, msgId, chatId, type, userId, context });
+			masterCommands[command]({ sdk, text, msgId, chatId, type, userId, format, command, context });
 
 			return;
 		}
@@ -279,7 +292,9 @@ const init = () => {
 
             bets[chatId] = totalHours;
 
-            sdk.sendText(chatId, `👍 Принял твою оценку:\n${duration}`);
+            if (!isOwner) {
+                sdk.sendText(chatId, `👍 Принял твою оценку:\n${duration}`);
+            }
 		} else {
 			sdk.sendText(chatId, `⛔ Не совсем тебя понял, я принимаю ответы в разных форматах, например:
 1w 2d 3h

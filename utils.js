@@ -1,3 +1,5 @@
+const { MessageBuilder } = require('myteam-bot-sdk');
+
 const formatNum = (number, keys) => {
     const mod100 = number % 100;
     const mod10 = number % 10;
@@ -9,7 +11,7 @@ const formatNum = (number, keys) => {
     return `${number} ${keys[index]}`;
 };
 
-const formatDuration = (value, onlyLong = false) => {
+const formatDuration = (value, format = false) => {
     const hours = value % 8;
     const _days = Math.floor(value / 8);
     const days = _days % 5;
@@ -18,7 +20,11 @@ const formatDuration = (value, onlyLong = false) => {
     const long = `${weeks ? `${formatNum(weeks, ['неделя', 'недели', 'недель'])}` : ''}${days ? ` ${formatNum(days, ['день', 'дня', 'дней'])}` : ''}${hours ? ` ${formatNum(hours, ['час', 'часа', 'часов'])}` : ''}`.trim();
     const short = `${weeks ? `${weeks}w` : ''}${days ? ` ${days}d` : ''}${hours ? ` ${hours}h` : ''}`.trim();
 
-    if (onlyLong) {
+    if (format === 'short') {
+        return short;
+    }
+
+    if (format) {
         return long;
     }
     return `${long} (${short})`;
@@ -29,6 +35,7 @@ const parseBet = (text) => {
         .toLowerCase()
         .trim()
         .replace('-', ' ')
+        .replace(/один|одна/im, '1')
         .replace(/пара|пару|два|две/im, '2')
         .replace(/три/im, '3')
         .replace(/четыре/im, '4')
@@ -40,7 +47,15 @@ const parseBet = (text) => {
     let weeks = ~~value.toLowerCase().match(/(\d+)\s*[w|н]/i)?.[1];
     let days = ~~value.toLowerCase().match(/(\d+)\s*[d|д]/i)?.[1];
     let hours = ~~value.toLowerCase().match(/(\d+)\s*[h|ч]/i)?.[1];
-    const sprints = ~~value.toLowerCase().match(/(\d+)\s*спринт/i)?.[1];
+    let sprints = ~~value.toLowerCase().match(/(\d+)\s*спринт/i)?.[1];
+
+    if (!sprints && value.includes('спринт')) {
+        sprints = 1;
+    }
+
+    if (!days && value.includes('день')) {
+        days = 1;
+    }
 
     weeks += (sprints * 2);
 
@@ -79,9 +94,45 @@ const calc = (bets) => {
     return { count, mid, med };
 };
 
+const shiftFormat = (format, shift) => {
+    return format
+        ? Object.entries(format)
+            .reduce(
+                (list, [key, value]) => ({
+                    ...list,
+                    [key]: value.map(
+                        (item) => ({
+                            ...item,
+                            ...(typeof item.offset === 'undefined' ? {} : { offset: Number(item.offset) + shift })
+                        })
+                    )
+                }),
+                {}
+            )
+        : format;
+};
+
+const formattedMessage = (text, format) => {
+    const message = new MessageBuilder();
+
+    message.textValue = text;
+    message.format = format;
+
+    return message;
+};
+
+const contextMessage = (text, context) => {
+    const [prefix, postfix] = text.split('%s');
+
+    return formattedMessage(`${prefix}${context.context}${postfix}`, shiftFormat(context.format, prefix.length));
+};
+
 module.exports = {
     formatNum,
 	formatDuration,
     parseBet,
     calc,
+    shiftFormat,
+    formattedMessage,
+    contextMessage,
 };

@@ -1,6 +1,6 @@
 {
   "name": "pckr",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "scripts": {
     "start": "pm2 start node index.js --name pckr",
     "stop": "pm2 stop pckr && pm2 delete pckr",

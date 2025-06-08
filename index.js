@@ -65,6 +65,14 @@ const start = async ({ sdk, chatId, type }) => {
     }
 };
 
+const formats = `1w 2d 3h
+2d3h
+1w.2d.3h.
+1 неделя 2 дня 3 часа
+1н. 2д. 3ч.
+1 нед 2 дн 3 ч
+и т.д.`;
+
 const help = async ({ sdk, chatId, context }) => {
     const isOwner = chatId === MASTER_CHAT_ID;
 
@@ -74,7 +82,10 @@ const help = async ({ sdk, chatId, context }) => {
 /end - закончить оценку
 /list - список оценок по текущей задачке
 /history - последние голосования
-/members - список участников`);
+/members - список участников
+/kick - отключить участника из опроса`);
+    } else {
+        sdk.sendText(chatId, `я могу помогу помочь в оценке задачек.\nпонимаю ответы в разных форматах, например:\n${formats}`);
     }
 };
 
@@ -136,7 +147,9 @@ const end = async ({ sdk, chatId, context }) => {
     const { count, mid, med } = calc(bets);
     const total = IDs.length;
 
-    const message = contextMessage(`✅ Вот и оценили задачку:\n%s\n\nПроголосовали ${count} из ${total}\n\nСредняя арифметическая оценка: ${formatDuration(mid, true)}\nМедианная оценка: ${formatDuration(med, true)}\n\n${formatDuration(med, 'short')}`, current);
+    const betsList = Object.values(bets).map((value) => formatDuration(value, 'short')).join(' | ');
+
+    const message = contextMessage(`✅ Вот и оценили задачку:\n%s\n\nПроголосовали ${count} из ${total}\nОценки: ${betsList}\n\nСредняя арифметическая оценка: ${formatDuration(mid, true)}\nМедианная оценка: ${formatDuration(med, true)}\n\n${formatDuration(med, 'short')}`, current);
     spam(sdk, message);
 
     historyFile.write(JSON.stringify({
@@ -296,14 +309,7 @@ const init = () => {
                 sdk.sendText(chatId, `👍 Принял твою оценку:\n${duration}`);
             }
 		} else {
-			sdk.sendText(chatId, `⛔ Не совсем тебя понял, я принимаю ответы в разных форматах, например:
-1w 2d 3h
-2d3h
-1w.2d.3h.
-1 неделя 2 дня 3 часа
-1н. 2д. 3ч.
-1 нед 2 дн 3 ч
-и т.д.`);
+			sdk.sendText(chatId, `⛔ Не совсем тебя понял, я принимаю ответы в разных форматах, например:\n${formats}`);
 		}
 	});
 	

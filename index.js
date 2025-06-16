@@ -130,46 +130,49 @@ const help = async ({ sdk, chatId, isOwner }) => {
 
 const mod = async ({ sdk, chatId, context }) => {
     if (!IDs.includes(context)) {
-        sdk.sendText(chatId, `⚙️ "${context}" не является участником чата`);
+        await sdk.sendText(chatId, `⚙️ "${context}" не является участником чата`);
 
         return;
     }
 
     if (modIDs.includes(context)) {
-        sdk.sendText(chatId, `⚙️ "${context}" уже является модератором`);
+        await sdk.sendText(chatId, `⚙️ "${context}" уже является модератором`);
 
         return;
     }
 
     addMod(context);
 
-    sdk.sendText(chatId, `⚙️ "${context}" добавлен(а) в модераторы`);
+    await sdk.sendText(chatId, `⚙️ "${context}" добавлен(а) в модераторы`);
+    await sdk.sendText(context, `⚙️ теперь ты являешься модератором и можешь добавлять задачи для оценки\n/help - получение списка доступных команд`);
 };
 
 const unmod = async ({ sdk, chatId, context }) => {
     if (!IDs.includes(context)) {
-        sdk.sendText(chatId, `⚙️ "${context}" не является участником чата`);
+        await sdk.sendText(chatId, `⚙️ "${context}" не является участником чата`);
 
         return;
     }
 
     if (!modIDs.includes(context)) {
-        sdk.sendText(chatId, `⚙️ "${context}" не является модератором`);
+        await sdk.sendText(chatId, `⚙️ "${context}" не является модератором`);
 
         return;
     }
 
     kickMod(context);
 
-    sdk.sendText(chatId, `⚙️ "${context}" исключен(а) из модераторов`);
+    await sdk.sendText(chatId, `⚙️ "${context}" исключен(а) из модераторов`);
 };
 
 const mods = async ({ sdk, chatId }) => {
     if (modIDs.length === 0) {
-        sdk.sendText(chatId, `⚙️ пока нет ни одного модератора`);
+        await sdk.sendText(chatId, `⚙️ пока нет ни одного модератора`);
+
+        return;
     }
 
-    sdk.sendText(chatId, `⚙️ Список модераторов:\n${modIDs.join('\n')}`);
+    await sdk.sendText(chatId, `⚙️ Список модераторов:\n${modIDs.join('\n')}`);
 };
 
 const history = async ({ sdk, chatId, context }) => {

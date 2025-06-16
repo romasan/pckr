@@ -23,10 +23,15 @@ let current = null;
 let bets = {};
 
 const chatsFilePath = __dirname + '/chats.log';
+const modsFilePath = __dirname + '/mods.log';
 const historyFilePath = __dirname + '/history.log';
 
 if (!fs.existsSync(chatsFilePath)) {
     fs.writeFileSync(chatsFilePath, '');
+}
+
+if (!fs.existsSync(modsFilePath)) {
+    fs.writeFileSync(modsFilePath, '');
 }
 
 if (!fs.existsSync(historyFilePath)) {
@@ -39,11 +44,44 @@ let IDs = fs.readFileSync(chatsFilePath)
     .filter(Boolean)
     .reduce((list, item) => (list.includes(item) ? list : [...list, item]), []);
 
+let modIDs = fs.readFileSync(modsFilePath)
+    .toString()
+    .split('\n')
+    .filter(Boolean)
+    .reduce((list, item) => (list.includes(item) ? list : [...list, item]), []);
+
 const chatsFile = fs.createWriteStream(chatsFilePath, { flags : 'a' });
+const modsFile = fs.createWriteStream(chatsFilePath, { flags : 'a' });
 const historyFile = fs.createWriteStream(historyFilePath, { flags : 'a' });
+
+const addMod = (chatId) => {
+    if (!modIDs.includes(chatId)) {
+        modIDs.push(chatId);
+        modsFile.write(chatId + '\n');
+    }
+};
+
+const kickMod = (chatId) => {
+    modIDs = modIDs.filter((item) => item !== chatId).filter(Boolean);
+    fs.writeFileSync(chatsFilePath, modIDs.join('\n') + '\n');
+};
+
+const isMod = (chatId) => {
+    return modIDs.includes(chatId);
+};
 
 const spam = (sdk, text) => {
     IDs.forEach((chatId) => {
+        sdk.sendText(chatId, text);
+    });
+};
+
+const spamMods = (sdk, text) => {
+    const ids = isMod(MASTER_CHAT_ID)
+        ? modIDs
+        : [...modIDs, MASTER_CHAT_ID];
+
+    ids.forEach((chatId) => {
         sdk.sendText(chatId, text);
     });
 };
@@ -73,9 +111,7 @@ const formats = `1w 2d 3h
 1 нед 2 дн 3 ч
 и т.д.`;
 
-const help = async ({ sdk, chatId, context }) => {
-    const isOwner = chatId === MASTER_CHAT_ID;
-
+const help = async ({ sdk, chatId, isOwner }) => {
     if (isOwner) {
         sdk.sendText(chatId, `⚙️ команды для модерации:
 /new - новая задачка на оценку
@@ -83,10 +119,57 @@ const help = async ({ sdk, chatId, context }) => {
 /list - список оценок по текущей задачке
 /history - последние голосования
 /members - список участников
-/kick - отключить участника из опроса`);
+/kick - отключить участника из опроса
+/mod - добавить модератора
+/unmod - исключить из списка модераторов
+/mods - список модераторов`);
     } else {
         sdk.sendText(chatId, `я могу помогу помочь в оценке задачек.\nпонимаю ответы в разных форматах, например:\n${formats}`);
     }
+};
+
+const mod = async ({ sdk, chatId, context }) => {
+    if (!IDs.includes(context)) {
+        sdk.sendText(chatId, `⚙️ "${context}" не является участником чата`);
+
+        return;
+    }
+
+    if (modIDs.includes(context)) {
+        sdk.sendText(chatId, `⚙️ "${context}" уже является модератором`);
+
+        return;
+    }
+
+    addMod(context);
+
+    sdk.sendText(chatId, `⚙️ "${context}" добавлен(а) в модераторы`);
+};
+
+const unmod = async ({ sdk, chatId, context }) => {
+    if (!IDs.includes(context)) {
+        sdk.sendText(chatId, `⚙️ "${context}" не является участником чата`);
+
+        return;
+    }
+
+    if (!modIDs.includes(context)) {
+        sdk.sendText(chatId, `⚙️ "${context}" не является модератором`);
+
+        return;
+    }
+
+    kickMod(context);
+
+    sdk.sendText(chatId, `⚙️ "${context}" исключен(а) из модераторов`);
+};
+
+const mods = async ({ sdk, chatId }) => {
+    if (modIDs.length === 0) {
+        sdk.sendText(chatId, `⚙️ пока нет ни одного модератора`);
+    }
+
+    sdk.sendText(chatId, `⚙️ Список модераторов:\n${modIDs.join('\n')}`);
 };
 
 const history = async ({ sdk, chatId, context }) => {
@@ -187,7 +270,9 @@ const kick = ({ sdk, chatId, context }) => {
 const stop = async ({ sdk, chatId, context }) => {
     IDs = IDs.filter((item) => item !== chatId).filter(Boolean);
     fs.writeFileSync(chatsFilePath, IDs.join('\n') + '\n');
-    // sdk.sendText(MASTER_CHAT_ID, `⚙️ Участник [${context}] вышел из рассылки по команде /stop`);
+    if (chatId !== MASTER_CHAT_ID) {
+        sdk.sendText(MASTER_CHAT_ID, `⚙️ Участник [${context}] вышел из рассылки по команде /stop`);
+    }
 };
 
 const commands = {
@@ -207,6 +292,9 @@ const masterCommands = {
     his: history,
     members,
     kick,
+    mod,
+    unmod,
+    mods,
 };
 
 const init = () => {
@@ -232,7 +320,7 @@ const init = () => {
 
         console.log(`MESSAGE [${chatId}] ${new Date().toGMTString()}: "${text}"`);
 
-        const isOwner = chatId === MASTER_CHAT_ID;
+        const isOwner = chatId === MASTER_CHAT_ID || isMod(chatId);
         const isChatParticipant = IDs.includes(chatId);
 
 		try {
@@ -259,13 +347,13 @@ const init = () => {
 		const command = _command?.toLowerCase();
 	
 		if (commands[command]) {
-			commands[command]({ sdk, text, msgId, chatId, type, userId, format, command, context });
+			commands[command]({ sdk, text, msgId, chatId, type, userId, format, command, context, isOwner });
 
 			return;
 		}
 
 		if (isOwner && masterCommands[command]) {
-			masterCommands[command]({ sdk, text, msgId, chatId, type, userId, format, command, context });
+			masterCommands[command]({ sdk, text, msgId, chatId, type, userId, format, command, context, isOwner });
 
 			return;
 		}
@@ -295,7 +383,7 @@ const init = () => {
                 ? inputDuration
                 : `${inputDuration} (${formattedDuration})`;
 
-            sdk.sendText(MASTER_CHAT_ID, `⚙️ [${chatId}] сделал оценку:\n${duration}\n${count} / ${total}`);
+            spamMods(sdk, `⚙️ [${chatId}] сделал оценку:\n${duration}\n${count} / ${total}`);
 
             if (totalHours < 0 || totalHours > 1920) {
                 sdk.sendText(chatId, `👀 Какой-то странный срок:\n${duration}\nтакой ответ я не могу принять.`);

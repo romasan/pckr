@@ -129,6 +129,12 @@ const help = async ({ sdk, chatId, isOwner }) => {
 };
 
 const mod = async ({ sdk, chatId, context }) => {
+    if (!context) {
+        await sdk.sendText(chatId, `⚙️ нужно ввести ID участника, например:\n\`/mod foo@bar\`\nвот список участников опроса:\n${IDs.join('\n')}`);
+
+        return;
+    }
+
     if (!IDs.includes(context)) {
         await sdk.sendText(chatId, `⚙️ "${context}" не является участником чата`);
 
@@ -148,6 +154,12 @@ const mod = async ({ sdk, chatId, context }) => {
 };
 
 const unmod = async ({ sdk, chatId, context }) => {
+    if (!context) {
+        await sdk.sendText(chatId, `⚙️ нужно ввести ID модератора, например:\n\`/unmod foo@bar\`\nвот список модераторов опроса:\n${modIDs.join('\n') || 'пока нет модераторов'}`);
+
+        return;
+    }
+
     if (!IDs.includes(context)) {
         await sdk.sendText(chatId, `⚙️ "${context}" не является участником чата`);
 

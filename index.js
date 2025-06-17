@@ -51,7 +51,7 @@ let modIDs = fs.readFileSync(modsFilePath)
     .reduce((list, item) => (list.includes(item) ? list : [...list, item]), []);
 
 const chatsFile = fs.createWriteStream(chatsFilePath, { flags : 'a' });
-const modsFile = fs.createWriteStream(chatsFilePath, { flags : 'a' });
+const modsFile = fs.createWriteStream(modsFilePath, { flags : 'a' });
 const historyFile = fs.createWriteStream(historyFilePath, { flags : 'a' });
 
 const addMod = (chatId) => {
@@ -219,7 +219,7 @@ const list = ({ sdk, chatId, context }) => {
 
 const add = async ({ sdk, chatId, format, command, context }) => {
     if (!context) {
-        sdk.sendText(chatId, `⚙️ Ошибка: пустой запрос`);
+        sdk.sendText(chatId, `⚙️ Ошибка: пустой запрос, нужно ввести название задачи\n\`/new название задачи\``);
 
         return;
     }
@@ -238,7 +238,7 @@ const add = async ({ sdk, chatId, format, command, context }) => {
 
 const end = async ({ sdk, chatId, context }) => {
     if (!current) {
-        sdk.sendText(chatId, `⚙️ Ошибка: пустой запрос`);
+        sdk.sendText(chatId, `⚙️ Ошибка: нет активной задачи`);
 
         return;
     }
@@ -347,9 +347,9 @@ const init = () => {
 		if (Date.now() <= now) {
 			console.log(`SKIP from: ${chatId}; text: ${text}`);
 
-			if (!skip[chatId]) {
-				// sdk.sendText(chatId, `Привет, я вернулся, если нужна моя помощь повтори сообщение`);
-			}
+			// if (!skip[chatId]) {
+			// 	sdk.sendText(chatId, `Привет, я вернулся, если нужна моя помощь повтори сообщение`);
+			// }
 
 			skip[chatId] = true;
 

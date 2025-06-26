@@ -86,6 +86,7 @@ const parseBet = (text) => {
 };
 
 const calc = (bets) => {
+    console.log('==== CALC', bets);
     const count = Object.keys(bets).length;
     const sorted = Object.values(bets).sort();
     const mid = Math.ceil(sorted.reduce((s, e) => s + e, 0) / count);

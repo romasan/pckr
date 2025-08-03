@@ -317,6 +317,8 @@ const init = () => {
 
     console.log('Start chat bot', new Date().toGMTString());
 
+    sdk.sendText(MASTER_CHAT_ID, `⚙️ Я жив!)`);
+
 	sdk.on('newMessage', (event) => {
 		const {
 			text,

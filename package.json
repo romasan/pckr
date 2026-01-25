@@ -1,9 +1,9 @@
 {
-  "name": "pckr",
+  "name": "dayly",
   "version": "0.0.2",
   "scripts": {
-    "start": "pm2 start node index.js --name pckr",
-    "stop": "pm2 stop pckr && pm2 delete pckr",
+    "start": "pm2 start node index.js --name dayly",
+    "stop": "pm2 stop dayly && pm2 delete dayly",
     "logs": "pm2 log",
     "dev": "node index.js"
   },

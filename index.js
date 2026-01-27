@@ -1,26 +1,31 @@
 const { MyTeamSDK } = require('myteam-bot-sdk');
 const fs = require('fs');
+const http = require('http');
 
 const {
-	formatDuration,
 	getDate,
 	getTime,
 	getTomorrow,
 	isDayOff,
+	getSlavicName,
+	// extractNumbers,
+	// uniq,
 } = require('./utils');
+// const { getIssueData } = require('./jira');
 require("dotenv").config();
 
 const {
 	VKTEAMS_TOKEN,
 	VKTEAMS_API_URL,
 	MASTER_CHAT_ID,
+	WEB_SERVER_HOST,
+	WEB_SERVER_PORT,
 } = process.env;
 
 let sdk;
 
 const now = Date.now() + 1000;
 const skip = {};
-let bets = {};
 
 const alarmClock = {
 	'11:15': '',
@@ -81,7 +86,7 @@ let modIDs = fs.readFileSync(modsFilePath)
 	.filter(Boolean)
 	.reduce((list, item) => (list.includes(item) ? list : [...list, item]), []);
 
-const chatsFile = fs.createWriteStream(chatsFilePath, { flags : 'a' });
+const chatsFile = fs.createWriteStream(chatsFilePath, { flags: 'a' });
 const modsFile = fs.createWriteStream(modsFilePath, { flags: 'a' });
 
 const addMod = (chatId) => {
@@ -125,20 +130,20 @@ const start = async (attrs) => {
 
 	const { sdk, chatId } = attrs;
 
-    if (!IDs.includes(chatId)) {
-        IDs.push(chatId);
-        chatsFile.write(chatId + '\n');
-        sdk.sendText(MASTER_CHAT_ID, `⚙️ Новый участник: ${chatId}`);
-    }
+	if (!IDs.includes(chatId)) {
+		IDs.push(chatId);
+		chatsFile.write(chatId + '\n');
+		sdk.sendText(MASTER_CHAT_ID, `⚙️ Новый участник: ${chatId}`);
+	}
 
 	setTimeout(() => {
-        help(attrs);
-    }, 1000);
+		help(attrs);
+	}, 1000);
 };
 
 const help = async ({ sdk, chatId, isOwner }) => {
-	    if (isOwner) {
-	        sdk.sendText(chatId, `\
+	if (isOwner) {
+		sdk.sendText(chatId, `\
 ⚙️ команды для модерации:
 /members - список участников
 /kick - отключить участника из опроса
@@ -149,8 +154,8 @@ const help = async ({ sdk, chatId, isOwner }) => {
 /spam - массовая рассылка
 /report - отчёт
 `);
-			// return;
-	    }
+		// return;
+	}
 
 	sdk.sendText(chatId, `\
 Чтобы рассказать чем занимался вчера и чем планируешь заняться сегодня, просто напиши этот в чат в любом формате.
@@ -356,7 +361,35 @@ const tomorrow = async ({ sdk, chatId, context }) => {
 	sdk.sendText(MASTER_CHAT_ID, `⚙️ ${chatId} заранее приготовил отчёт на завтра`);
 };
 
-const report = ({ sdk, chatId }) => {
+function replaceMentionedTasks(text, tasks) {
+	// Словарь для быстрого поиска задачи по ключу
+	const taskDict = {};
+	for (const task of tasks) {
+		taskDict[task.issueKey] = task;
+	}
+
+	// Регулярка для поиска строк "Упомянутые таски: ..."
+	const pattern = /^(Упомянутые таски:)\s*(.*)$/gm;
+
+	// Функция замены
+	function replacer(match, prefix, keysStr, offset, input) {
+		// Извлекаем все VKPL-xxxx из строки
+		const keys = (keysStr.match(/\bVKPL-\d+\b/g) || []);
+		let result = '';
+		for (const key of keys) {
+			const task = taskDict[key];
+			if (task) {
+				result += `${key}: ${task.summary} [${task.performer}] (${task.status})\n`;
+			}
+		}
+		return result;
+	}
+
+	// Заменяем все подходящие строки
+	return text.replace(pattern, replacer);
+}
+
+const report = async ({ sdk, chatId }) => {
 	const list = Object.entries(getReportFile())
 		.filter(([key, value]) => Boolean(value));
 
@@ -366,12 +399,31 @@ const report = ({ sdk, chatId }) => {
 		return;
 	}
 
-	const text = list.map(([chatId, text]) => `\
-================================
-${chatId}
-${text}`).join('\n')
+	// let issuesList = [];
 
-	sdk.sendText(chatId, text);
+	let text = `Заполнили отчёт: ${list.length} / ${IDs.length}\n\n`;
+	text += list
+		.map(([chatId, text]) => [getSlavicName(chatId), text])
+		.sort(([a], [b]) => a > b ? 1 : -1)
+		.map(([chatId, text]) => `${chatId}\n${text}`)
+		// .map((text) => {
+		// 	const issues = extractNumbers(text)
+		// 		.filter((num) => num > 1000)
+		// 		.map((num) => `VKPL-${num}`);
+
+		// 	issuesList = issuesList.concat(issues);
+
+		// 	return issues.length ? `${text}\n---\nУпомянутые таски: ${issues.join(', ')}` : text;
+		// })
+		.join('\n\n')
+
+	const msg = await sdk.sendText(chatId, text);
+
+	// const issuesData = await Promise.all(uniq(issuesList).map(getIssueData));
+
+	// text = replaceMentionedTasks(text, issuesData);
+
+	// sdk.editText(chatId, msg, text);
 };
 
 const members = async ({ sdk, chatId, context }) => {
@@ -492,6 +544,37 @@ const init = () => {
 	});
 
 	sdk.listen();
+
+	// ---
+
+	const callback = async (req, res) => {
+		console.log('==== origin:', req?.headers?.['origin']);
+		console.log('==== url:', req?.url);
+
+		res.setHeader('Access-Control-Allow-Origin', req?.headers?.['origin'] || '*');
+		res.setHeader('Access-Control-Allow-Credentials', 'true');
+		res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie');
+		res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
+
+		if (req?.url === '/report') {
+			res.setHeader('Content-Type', 'application/json');
+			res.end(JSON.stringify({
+				total: IDs.length,
+				data: getReportFile(),
+			}));
+
+			return;
+		}
+
+		res.setHeader('Content-Type', 'application/json');
+		res.end('{"debug": "=)"}');
+	};
+
+	const webServer = http.createServer(callback);
+
+	console.log('Start web server', new Date().toGMTString(), 'on', WEB_SERVER_HOST, WEB_SERVER_PORT);
+
+	webServer.listen(WEB_SERVER_PORT, WEB_SERVER_HOST);
 }
 
 init();

@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "dotenv": "^16.0.3",
-    "myteam-bot-sdk": "^1.0.1",
     "node-fetch": "^2.6.9",
-    "pm2": "^6.0.5"
+    "pm2": "^6.0.5",
+    "vkwrksps-bot": "^0.2.0"
   }
 }

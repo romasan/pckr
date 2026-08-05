@@ -1,4 +1,4 @@
-const { MyTeamSDK, MessageBuilder } = require('myteam-bot-sdk');
+const { Bot, Format } = require('vkwrksps-bot');
 const fs = require('fs');
 const http = require('http');
 
@@ -141,14 +141,32 @@ const spam = ({ sdk, chatId, text, context, format }) => {
 	const shift = text.length - context.length;
 	const shiftedFormat = shiftFormat(format, shift);
 
-	IDs.forEach((chatId) => {
-		const message = new MessageBuilder().text(context);
+	const opts = {};
 
-		if (shiftedFormat && Object.keys(shiftedFormat).length) {
-			message.format = shiftedFormat;
+	if (shiftedFormat && Object.keys(shiftedFormat).length) {
+		const messageFormat = new Format();
+
+		for (const [style, ranges] of Object.entries(shiftedFormat)) {
+			for (const range of ranges) {
+				const args = {};
+
+				if (range.url) {
+					args.url = range.url;
+				}
+
+				if (range.code) {
+					args.code = range.code;
+				}
+
+				messageFormat.add(style, range.offset, range.length, Object.keys(args).length ? args : undefined);
+			}
 		}
 
-		sdk.sendText(chatId, message);
+		opts.format = messageFormat;
+	}
+
+	IDs.forEach((chatId) => {
+		sdk.sendText(chatId, context, opts);
 	});
 };
 
@@ -506,57 +524,14 @@ const masterCommands = {
 };
 
 const init = () => {
-	sdk = new MyTeamSDK({ token: VKTEAMS_TOKEN, baseURL: VKTEAMS_API_URL });
-
-	// --- Защита от обрывов long polling ---
-	// Сервер/прокси периодически отвечает HTML вместо JSON, библиотека падает с invalid json.
-	// Логируем ошибки SDK, чтобы процесс не умирал.
-	sdk.on('error', (error) => {
-		console.error('[SDK error]', error?.message || error);
-	});
-
-	// Парсим ответ вручную, чтобы вместо "invalid json response body"
-	// получать понятную ошибку с деталями (статус, content-type, фрагмент тела).
-	sdk._handleSDKResponse = async (result) => {
-		const text = await result.text();
-		let json;
-
-		try {
-			json = JSON.parse(text);
-		} catch (error) {
-			throw new Error(`MyTeam API вернул не-JSON ответ (${result.status} ${result.statusText}, content-type: "${result.headers.get('content-type')}"): ${text.slice(0, 300)}`);
-		}
-
-		if (json.ok) {
-			return json;
-		}
-
-		throw new Error(`${json.description || 'MyTeam API Error'}: ${JSON.stringify({ raw: json, url: result.url })}`);
-	};
-
-	// Long polling с ретраями: при ошибке ждём с экспоненциальной паузой
-	// и пробуем снова, не долбя сервер и не заваливая лог.
-	const originalMainLoopIter = sdk._mainLoopIter.bind(sdk);
-	let pollErrors = 0;
-
-	sdk._mainLoopIter = async () => {
-		try {
-			await originalMainLoopIter();
-			pollErrors = 0;
-		} catch (error) {
-			pollErrors += 1;
-			const delay = Math.min(1000 * 2 ** (pollErrors - 1), 30000);
-
-			sdk.emit('error', error);
-			await new Promise((resolve) => setTimeout(resolve, delay));
-		}
-	};
+	// Нормализуем URL (убираем завершающий слэш), чтобы избежать двойных слэшей в запросах.
+	sdk = new Bot({ token: VKTEAMS_TOKEN, apiUrl: VKTEAMS_API_URL.replace(/\/+$/, '') });
 
 	console.log('Start chat bot', new Date().toGMTString());
 
 	sdk.sendText(MASTER_CHAT_ID, `⚙️ Я жив!)`);
 
-	sdk.on('newMessage', (event) => {
+	sdk.onMessage((event) => {
 		const {
 			text,
 			format,
@@ -568,9 +543,9 @@ const init = () => {
 			from: {
 				userId,
 			},
-		} = event.payload;
+		} = event.data;
 
-		// fs.writeFileSync(__dirname + '/last-msg.json', JSON.stringify(event.payload, null, 2));
+		// fs.writeFileSync(__dirname + '/last-msg.json', JSON.stringify(event.data, null, 2));
 
 		console.log(`MESSAGE [${chatId}] ${new Date().toGMTString()}: "${text}"`);
 
@@ -580,7 +555,7 @@ const init = () => {
 		try {
 			const postfix = Array(4).fill().map(() => parseInt(Math.random() * 10)).join('');
 
-			fs.writeFileSync(`${__dirname}/logs/${Date.now()}-${chatId}-${postfix}`, JSON.stringify(event.payload, null, 2));
+			fs.writeFileSync(`${__dirname}/logs/${Date.now()}-${chatId}-${postfix}`, JSON.stringify(event.data, null, 2));
 		} catch (ignore) { }
 
 		if (Date.now() <= now) {
@@ -595,7 +570,7 @@ const init = () => {
 			return;
 		}
 
-		// const _text = text || event?.payload?.parts?.[0].payload?.message?.text || '';
+		// const _text = text || event?.data?.parts?.[0].payload?.message?.text || '';
 
 		const [, _command, context] = (text || '').match(/^\/(\w+)[\s\n]?([\w\W]+)?/) || [];
 		const command = _command?.toLowerCase();
@@ -622,7 +597,7 @@ const init = () => {
 		addReport(attrs);
 	});
 
-	sdk.listen();
+	sdk.startPolling();
 
 	// ---
 

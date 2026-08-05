@@ -1,4 +1,4 @@
-const { MessageBuilder } = require('myteam-bot-sdk');
+const { MessageBuilder } = require('vkwrksps-bot');
 
 const formatNum = (number, keys) => {
     const mod100 = number % 100;

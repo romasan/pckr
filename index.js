@@ -1,6 +1,16 @@
-const { MyTeamSDK } = require('myteam-bot-sdk');
+const { MyTeamSDK, MessageBuilder } = require('myteam-bot-sdk');
 const fs = require('fs');
 const http = require('http');
+
+// Не даём процессу упасть из-за необработанных ошибок
+// (например, когда сервер/прокси отвечает HTML вместо JSON)
+process.on('unhandledRejection', (error) => {
+	console.error('[unhandledRejection]', error?.message || error);
+});
+
+process.on('uncaughtException', (error) => {
+	console.error('[uncaughtException]', error?.message || error);
+});
 
 const {
 	getDate,
@@ -105,15 +115,40 @@ const isMod = (chatId) => {
 	return modIDs.includes(chatId);
 };
 
-const spam = ({ sdk, chatId, context }) => {
+const shiftFormat = (format, shift) => {
+	if (!format) {
+		return undefined;
+	}
+
+	return Object.entries(format)
+		.filter(([, ranges]) => Array.isArray(ranges) && ranges.length)
+		.reduce((result, [type, ranges]) => {
+			result[type] = ranges
+				.map((range) => ({ ...range, offset: range.offset - shift }))
+				.filter((range) => range.offset >= 0);
+
+			return result;
+		}, {});
+};
+
+const spam = ({ sdk, chatId, text, context, format }) => {
 	if (!context) {
 		sdk.sendText(chatId, 'Пустое сообщение отменено');
 
 		return;
 	}
 
+	const shift = text.length - context.length;
+	const shiftedFormat = shiftFormat(format, shift);
+
 	IDs.forEach((chatId) => {
-		sdk.sendText(chatId, context);
+		const message = new MessageBuilder().text(context);
+
+		if (shiftedFormat && Object.keys(shiftedFormat).length) {
+			message.format = shiftedFormat;
+		}
+
+		sdk.sendText(chatId, message);
 	});
 };
 
@@ -472,6 +507,50 @@ const masterCommands = {
 
 const init = () => {
 	sdk = new MyTeamSDK({ token: VKTEAMS_TOKEN, baseURL: VKTEAMS_API_URL });
+
+	// --- Защита от обрывов long polling ---
+	// Сервер/прокси периодически отвечает HTML вместо JSON, библиотека падает с invalid json.
+	// Логируем ошибки SDK, чтобы процесс не умирал.
+	sdk.on('error', (error) => {
+		console.error('[SDK error]', error?.message || error);
+	});
+
+	// Парсим ответ вручную, чтобы вместо "invalid json response body"
+	// получать понятную ошибку с деталями (статус, content-type, фрагмент тела).
+	sdk._handleSDKResponse = async (result) => {
+		const text = await result.text();
+		let json;
+
+		try {
+			json = JSON.parse(text);
+		} catch (error) {
+			throw new Error(`MyTeam API вернул не-JSON ответ (${result.status} ${result.statusText}, content-type: "${result.headers.get('content-type')}"): ${text.slice(0, 300)}`);
+		}
+
+		if (json.ok) {
+			return json;
+		}
+
+		throw new Error(`${json.description || 'MyTeam API Error'}: ${JSON.stringify({ raw: json, url: result.url })}`);
+	};
+
+	// Long polling с ретраями: при ошибке ждём с экспоненциальной паузой
+	// и пробуем снова, не долбя сервер и не заваливая лог.
+	const originalMainLoopIter = sdk._mainLoopIter.bind(sdk);
+	let pollErrors = 0;
+
+	sdk._mainLoopIter = async () => {
+		try {
+			await originalMainLoopIter();
+			pollErrors = 0;
+		} catch (error) {
+			pollErrors += 1;
+			const delay = Math.min(1000 * 2 ** (pollErrors - 1), 30000);
+
+			sdk.emit('error', error);
+			await new Promise((resolve) => setTimeout(resolve, delay));
+		}
+	};
 
 	console.log('Start chat bot', new Date().toGMTString());
 

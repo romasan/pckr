@@ -12,6 +12,7 @@
     "url": "git+https://github.com/romasan/pckr.git"
   },
   "dependencies": {
+    "axios": "^1.20.0",
     "dotenv": "^16.0.3",
     "node-fetch": "^2.6.9",
     "pm2": "^6.0.5",

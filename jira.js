@@ -4,13 +4,6 @@ require('dotenv').config();
 
 async function getIssueData(issueKey) {
 
-	// const issueKeyMatch = issueUrl.match(/\/browse\/([A-Z0-9\-]+)/);
-	// if (!issueKeyMatch || !issueKeyMatch[1]) {
-	// 	console.error('Не удалось извлечь ключ задачи из ссылки');
-	// 	process.exit(1);
-	// }
-	// const issueKey = issueKeyMatch[1];
-
 	const options = {
 		url: `${process.env.JIRA_URL}/rest/api/2/issue/${issueKey}`,
 		headers: {
@@ -24,15 +17,17 @@ async function getIssueData(issueKey) {
 
 	const issue = response.data;
 
-	fs.writeFileSync(__dirname + '/tmp/' + issueKey + '.json', JSON.stringify(issue, null, 2));
+	const tmpDir = __dirname + '/tmp';
+	fs.mkdirSync(tmpDir, { recursive: true });
+	fs.writeFileSync(tmpDir + '/' + issueKey + '.json', JSON.stringify(issue, null, 2));
 
-	const status = issue.fields.status.name;
-	const summary = issue.fields.summary;
-	const performer = issue.fields.assignee.displayName;
+	const status = issue.fields?.status?.name || 'нет статуса';
+	const summary = issue.fields?.summary || '';
+	const performer = issue.fields?.assignee?.displayName || 'Не назначен';
 	const sprint = issue.fields?.customfield_15401?.[0]?.split('name=')?.pop()?.split(',')?.shift() || 'нет спринта';
 
 	return {
-        issueKey,
+		issueKey,
 		status,
 		summary,
 		performer,

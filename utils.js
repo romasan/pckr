@@ -114,8 +114,8 @@ const getName = (chatId) => chatId
     .pop();
 
 const dict = [
-    'zh ch sh sch x  a b v w g d e z i j k q l m n o p r s t u f h c y',
-    'ж  ч  ш  щ   кс а б в в г д е з и й к к л м н о п р с т у ф х ц я',
+    'zh ch sh sch x  ue a b v w g d e z i j k q l m n o p r s t u f h c y',
+    'ж  ч  ш  щ   кс уэ а б в в г д е з и й к к л м н о п р с т у ф х ц я',
 ].reduce((a, b) => {
     a = a.split(/\s+/);
     b = b.split(/\s+/);

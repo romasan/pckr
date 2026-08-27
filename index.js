@@ -1,9 +1,7 @@
 const { Bot, Format } = require('vkwrksps-bot');
 const fs = require('fs');
-const http = require('http');
 
 // Не даём процессу упасть из-за необработанных ошибок
-// (например, когда сервер/прокси отвечает HTML вместо JSON)
 process.on('unhandledRejection', (error) => {
 	console.error('[unhandledRejection]', error?.message || error);
 });
@@ -18,18 +16,17 @@ const {
 	getTomorrow,
 	isDayOff,
 	getSlavicName,
-	// extractNumbers,
-	// uniq,
+	extractNumbers,
+	uniq,
 } = require('./utils');
-// const { getIssueData } = require('./jira');
+const { getIssueData } = require('./jira');
+const { generateHtml } = require('./report');
 require("dotenv").config();
 
 const {
 	VKTEAMS_TOKEN,
 	VKTEAMS_API_URL,
 	MASTER_CHAT_ID,
-	WEB_SERVER_HOST,
-	WEB_SERVER_PORT,
 } = process.env;
 
 let sdk;
@@ -414,32 +411,20 @@ const tomorrow = async ({ sdk, chatId, context }) => {
 	sdk.sendText(MASTER_CHAT_ID, `⚙️ ${chatId} заранее приготовил отчёт на завтра`);
 };
 
-function replaceMentionedTasks(text, tasks) {
-	// Словарь для быстрого поиска задачи по ключу
-	const taskDict = {};
-	for (const task of tasks) {
-		taskDict[task.issueKey] = task;
+// Отправить HTML-отчёт файлом сразу из памяти (без сохранения на диск),
+// с именем report.html, а не полным путём на диске.
+async function sendHtmlReport(chatId, html) {
+	const form = new FormData();
+	form.append('token', sdk.token);
+	form.append('chatId', chatId);
+	form.append('file', new Blob([html], { type: 'text/html' }), 'report.html');
+	form.append('caption', 'Отчёт по дейлику (HTML)');
+
+	const res = await sdk.http.post(`${sdk.apiUrl}/messages/sendFile`, form);
+	if (!res.data.ok) {
+		throw new Error(`[sendFile] API error: ${res.data.description || 'unknown error'}`);
 	}
-
-	// Регулярка для поиска строк "Упомянутые таски: ..."
-	const pattern = /^(Упомянутые таски:)\s*(.*)$/gm;
-
-	// Функция замены
-	function replacer(match, prefix, keysStr, offset, input) {
-		// Извлекаем все VKPL-xxxx из строки
-		const keys = (keysStr.match(/\bVKPL-\d+\b/g) || []);
-		let result = '';
-		for (const key of keys) {
-			const task = taskDict[key];
-			if (task) {
-				result += `${key}: ${task.summary} [${task.performer}] (${task.status})\n`;
-			}
-		}
-		return result;
-	}
-
-	// Заменяем все подходящие строки
-	return text.replace(pattern, replacer);
+	return res.data;
 }
 
 const report = async ({ sdk, chatId }) => {
@@ -452,31 +437,78 @@ const report = async ({ sdk, chatId }) => {
 		return;
 	}
 
-	// let issuesList = [];
-
+	// Текстовая сводка (как было): кто заполнил и что написал
 	let text = `Заполнили отчёт: ${list.length} / ${IDs.length}\n\n`;
 	text += list
 		.map(([chatId, text]) => [getSlavicName(chatId), text])
 		.sort(([a], [b]) => a > b ? 1 : -1)
 		.map(([chatId, text]) => `${chatId}\n${text}`)
-		// .map((text) => {
-		// 	const issues = extractNumbers(text)
-		// 		.filter((num) => num > 1000)
-		// 		.map((num) => `VKPL-${num}`);
+		.join('\n\n');
 
-		// 	issuesList = issuesList.concat(issues);
+	await sdk.sendText(chatId, text);
 
-		// 	return issues.length ? `${text}\n---\nУпомянутые таски: ${issues.join(', ')}` : text;
-		// })
-		.join('\n\n')
+	// Собираем упомянутые в отчётах номера задач (числа > 1000 -> VKPL-<num>),
+	// чтобы подставить по ним подробности из Jira в HTML-отчёт.
+	const mentionedByChat = {};
+	const mentionedKeys = [];
 
-	const msg = await sdk.sendText(chatId, text);
+	for (const [reportChatId, reportText] of list) {
+		const keys = uniq(extractNumbers(reportText)
+			.filter((num) => num > 1000)
+			.map((num) => `VKPL-${num}`));
 
-	// const issuesData = await Promise.all(uniq(issuesList).map(getIssueData));
+		if (keys.length) {
+			mentionedByChat[reportChatId] = keys;
+			mentionedKeys.push(...keys);
+		}
+	}
 
-	// text = replaceMentionedTasks(text, issuesData);
+	// Получаем детали из Jira для всех упомянутых задач.
+	// Отдельные ошибки не должны ронять формирование отчёта.
+	const tasksByChat = {};
+	if (mentionedKeys.length) {
+		const uniqKeys = uniq(mentionedKeys);
+		const tasksData = await Promise.all(
+			uniqKeys.map(async (key) => {
+				try {
+					return await getIssueData(key);
+				} catch (error) {
+					console.error(`Не удалось получить данные по задаче ${key}:`, error?.message || error);
+					return null;
+				}
+			})
+		);
 
-	// sdk.editText(chatId, msg, text);
+		const byKey = {};
+		uniqKeys.forEach((key, i) => {
+			if (tasksData[i]) {
+				byKey[key] = tasksData[i];
+			}
+		});
+
+		for (const [reportChatId, keys] of Object.entries(mentionedByChat)) {
+			tasksByChat[reportChatId] = keys
+				.filter((key) => byKey[key])
+				.map((key) => byKey[key]);
+		}
+	}
+
+	// Отправляем HTML-отчёт файлом
+	const reports = list
+		.map(([chatId, reportText]) => ({ chatId, name: getSlavicName(chatId), text: reportText }))
+		.sort((a, b) => a.name > b.name ? 1 : -1);
+
+	try {
+		await sendHtmlReport(chatId, generateHtml({
+			reports,
+			total: IDs.length,
+			tasksByChat,
+			jiraUrl: process.env.JIRA_URL || '',
+		}));
+	} catch (fileError) {
+		console.error('Не удалось отправить HTML-отчёт:', fileError?.message || fileError);
+		sdk.sendText(chatId, `⚠️ Не удалось прикрепить HTML-отчёт: ${fileError?.message || fileError}`);
+	}
 };
 
 const members = async ({ sdk, chatId, context }) => {
@@ -598,37 +630,6 @@ const init = () => {
 	});
 
 	sdk.startPolling();
-
-	// ---
-
-	const callback = async (req, res) => {
-		console.log('==== origin:', req?.headers?.['origin']);
-		console.log('==== url:', req?.url);
-
-		res.setHeader('Access-Control-Allow-Origin', req?.headers?.['origin'] || '*');
-		res.setHeader('Access-Control-Allow-Credentials', 'true');
-		res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cookie');
-		res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
-
-		if (req?.url === '/report') {
-			res.setHeader('Content-Type', 'application/json');
-			res.end(JSON.stringify({
-				total: IDs.length,
-				data: getReportFile(),
-			}));
-
-			return;
-		}
-
-		res.setHeader('Content-Type', 'application/json');
-		res.end('{"debug": "=)"}');
-	};
-
-	const webServer = http.createServer(callback);
-
-	console.log('Start web server', new Date().toGMTString(), 'on', WEB_SERVER_HOST, WEB_SERVER_PORT);
-
-	webServer.listen(WEB_SERVER_PORT, WEB_SERVER_HOST);
 }
 
 init();

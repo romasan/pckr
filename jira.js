@@ -11,8 +11,12 @@ async function getIssueData(issueKey) {
 		}
 	};
 
+	// Таймаут запроса к Jira (мс). Задаётся через JIRA_TIMEOUT, по умолчанию 10000 мс.
+	const timeout = Number(process.env.JIRA_TIMEOUT) || 10000;
+
 	const response = await axios.get(options.url, {
-		headers: options.headers
+		headers: options.headers,
+		timeout,
 	});
 
 	const issue = response.data;

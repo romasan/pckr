@@ -21,17 +21,26 @@ function escapeHtml(str) {
 }
 
 // Карточка одной задачи Jira: ключ (ссылка), summary, статус, исполнитель.
+// Если по задаче нет подробностей (например, не удалось подключиться к Jira),
+// выводится только кликабельная ссылка на задачу.
 function issueCard(task, jiraUrl) {
 	const issueUrl = `${jiraUrl}/browse/${task.issueKey}`;
-	const title = task.summary || '';
-	const status = task.status ? ` [${task.status}]` : '';
-	const performer = task.performer ? ` — ${task.performer}` : '';
 
-	return `<li class="task-item">
-		<a href="${issueUrl}" target="_blank">${escapeHtml(task.issueKey)}</a>
-		<span class="task-summary">${escapeHtml(title)}</span>
-		<span class="task-status">${escapeHtml(status)}</span><span class="task-performer">${escapeHtml(performer)}</span>
-	</li>`;
+	const parts = [`<a href="${issueUrl}" target="_blank">${escapeHtml(task.issueKey)}</a>`];
+
+	if (task.summary) {
+		parts.push(`<span class="task-summary">${escapeHtml(task.summary)}</span>`);
+	}
+
+	if (task.status) {
+		parts.push(`<span class="task-status">[${escapeHtml(task.status)}]</span>`);
+	}
+
+	if (task.performer) {
+		parts.push(`<span class="task-performer">— ${escapeHtml(task.performer)}</span>`);
+	}
+
+	return `<li class="task-item">${parts.join(' ')}</li>`;
 }
 
 // Полный HTML-документ отчёта.

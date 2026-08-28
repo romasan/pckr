@@ -474,7 +474,9 @@ const report = async ({ sdk, chatId }) => {
 					return await getIssueData(key);
 				} catch (error) {
 					console.error(`Не удалось получить данные по задаче ${key}:`, error?.message || error);
-					return null;
+					// Не удалось получить данные из Jira — оставляем задачу в отчёте,
+					// но без подробностей (в карточке будет только ссылка на задачу).
+					return { issueKey: key };
 				}
 			})
 		);

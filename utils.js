@@ -1,4 +1,4 @@
-const { MessageBuilder } = require('vkwrksps-bot');
+const { MessageBuilder, Format } = require('vkwrksps-bot');
 
 const formatNum = (number, keys) => {
     const mod100 = number % 100;
@@ -47,6 +47,84 @@ const shiftFormat = (format, shift) => {
             )
         : format;
 };
+
+// Нормализует входящий format: VK Teams может присылать строку JSON или готовый объект.
+const normalizeFormat = (format) => {
+    if (!format) return undefined;
+
+    if (typeof format === 'string') {
+        try {
+            format = JSON.parse(format);
+        } catch (error) {
+            return undefined;
+        }
+    }
+
+    return format;
+};
+
+// Проверяет, есть ли в формате хотя бы один валидный диапазон.
+const isEmptyFormat = (format) => {
+    return !Object.entries(format || {}).some(([, ranges]) =>
+        Array.isArray(ranges) && ranges.some((r) => r && typeof r.offset === 'number' && r.length > 0)
+    );
+};
+
+// Склеивает несколько частей текста вместе с их форматами в один текст
+// и абсолютный формат (каждая часть: { text, format }, где format в координатах своей части).
+const buildFormatted = (parts) => {
+    let text = '';
+    const format = {};
+
+    for (const part of parts) {
+        const shift = text.length;
+        text += part.text;
+
+        for (const [style, ranges] of Object.entries(part.format || {})) {
+            if (!Array.isArray(ranges)) continue;
+            if (!format[style]) format[style] = [];
+
+            for (const range of ranges) {
+                if (range && typeof range.offset === 'number' && range.length > 0) {
+                    format[style].push({ ...range, offset: range.offset + shift });
+                }
+            }
+        }
+    }
+
+    return { text, format: isEmptyFormat(format) ? undefined : format };
+};
+
+// Превращает объект формата в экземпляр Format для передачи в sendText (opts.format).
+const formatFromObject = (format) => {
+    if (isEmptyFormat(format)) return undefined;
+
+    const messageFormat = new Format();
+
+    for (const [style, ranges] of Object.entries(format)) {
+        for (const range of ranges || []) {
+            if (!range || typeof range.offset !== 'number' || !range.length) continue;
+
+            const args = {};
+            if (range.url) args.url = range.url;
+            if (range.code) args.code = range.code;
+
+            messageFormat.add(style, range.offset, range.length, Object.keys(args).length ? args : undefined);
+        }
+    }
+
+    return messageFormat;
+};
+
+// Нормализует запись отчёта из файла: старая строка -> { text, format }.
+const normalizeReportEntry = (entry) => {
+    if (entry && typeof entry === 'object' && typeof entry.text === 'string') {
+        return entry;
+    }
+
+    return { text: String(entry ?? ''), format: undefined };
+};
+
 
 const formattedMessage = (text, format) => {
     const message = new MessageBuilder();
@@ -144,6 +222,11 @@ module.exports = {
     shiftFormat,
     formattedMessage,
     contextMessage,
+    normalizeFormat,
+    isEmptyFormat,
+    buildFormatted,
+    formatFromObject,
+    normalizeReportEntry,
     getDate,
     getTime,
     getTomorrow,

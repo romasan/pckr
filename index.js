@@ -18,6 +18,10 @@ const {
 	getSlavicName,
 	extractNumbers,
 	uniq,
+	normalizeFormat,
+	buildFormatted,
+	formatFromObject,
+	normalizeReportEntry,
 } = require('./utils');
 const { getIssueData } = require('./jira');
 const { generateHtml } = require('./report');
@@ -75,7 +79,7 @@ const checkAlarmClock = () => {
 			const reports = getReportFile();
 
 			for (const chatId of IDs) {
-				if (!reports[chatId]) {
+				if (!reports[chatId]?.text) {
 					sdk.sendText(chatId, `Привет!
 Расскажи чем занимался вчера и чем планируешь заниматься сегодня, если есть какие-то вопросы или проблемы обсудим их на дейлике.
 Если есть вопросы по работе бота с этим поможет команда /help`);
@@ -278,7 +282,7 @@ const mods = async ({ sdk, chatId }) => {
 
 const list = ({ sdk, chatId, context }) => {
 	const list = Object.entries(getReportFile())
-		.filter(([key, value]) => Boolean(value))
+		.filter(([key, value]) => Boolean(normalizeReportEntry(value).text))
 		.map(([key, value]) => key);
 
 	if (!list.length) {
@@ -306,27 +310,32 @@ const getReportFile = (tomorrow) => {
 	return data;
 }
 
-const setReportFileForClient = (chatId, text, tomorrow) => {
+const setReportFileForClient = (chatId, text, format, tomorrow) => {
 	const [key] = getDate(tomorrow ? getTomorrow() : undefined);
 	const filePath = __dirname + '/days/' + key + '.json';
 
 	fs.writeFileSync(filePath, JSON.stringify({
 		...getReportFile(tomorrow),
-		[chatId]: text,
+		[chatId]: { text, format },
 	}));
 }
 
 const cleanReportFileForClient = (chatId, tomorrow) => {
-	setReportFileForClient(chatId, '', tomorrow);
+	setReportFileForClient(chatId, '', undefined, tomorrow);
 }
 
-const appendReportFileForClient = (chatId, text, tomorrow) => {
-	const prev = getReportFile(tomorrow)[chatId] || '';
+const appendReportFileForClient = (chatId, text, format, tomorrow) => {
+	const prev = normalizeReportEntry(getReportFile(tomorrow)[chatId]);
+	const merged = buildFormatted([
+		{ text: prev.text, format: prev.format },
+		{ text: '\n', format: undefined },
+		{ text, format },
+	]);
 
-	setReportFileForClient(chatId, [prev, text].filter(Boolean).join('\n'), tomorrow);
+	setReportFileForClient(chatId, merged.text, merged.format, tomorrow);
 }
 
-const addReport = async ({ sdk, chatId, text }) => {
+const addReport = async ({ sdk, chatId, text, format }) => {
 	try {
 		if (!text) {
 			sdk.sendText(chatId, `Кажется ты ничего не написал (если ты отправил картинку или файл я пока не умею работать с таким)`);
@@ -334,7 +343,7 @@ const addReport = async ({ sdk, chatId, text }) => {
 			return;
 		}
 
-		appendReportFileForClient(chatId, text);
+		appendReportFileForClient(chatId, text, normalizeFormat(format));
 	} catch (error) {
 		sdk.sendText(MASTER_CHAT_ID, `⚙️ У ${chatId} что-то пошло не так\n${error}`);
 		sdk.sendText(chatId, `Что-то пошло не так( уже сообщил об этом администратору бота.`);
@@ -366,29 +375,30 @@ const reset = async ({ sdk, chatId, context }) => {
 
 const view = async ({ sdk, chatId, context }) => {
 	try {
-		const text = getReportFile(context === 'tomorrow')?.[chatId];
+		const entry = normalizeReportEntry(getReportFile(context === 'tomorrow')?.[chatId]);
 
-		if (!text) {
+		if (!entry.text) {
 			sdk.sendText(chatId, `Ты сегодня ещё ничего не писал`);
 
 			return;
 		}
 
-		sdk.sendText(chatId, `Вот твои сообщения отправленные сегодня:\n${text}`);
+		const opts = formatFromObject(entry.format) ? { format: formatFromObject(entry.format) } : {};
+		sdk.sendText(chatId, `Вот твои сообщения отправленные сегодня:\n${entry.text}`, opts);
 	} catch (error) {
 		sdk.sendText(MASTER_CHAT_ID, `⚙️ У ${chatId} что-то пошло не так\n${error}`);
 		sdk.sendText(chatId, `Что-то пошло не так( уже сообщил об этом администратору бота.`);
 	}
 };
 
-const tomorrow = async ({ sdk, chatId, context }) => {
+const tomorrow = async ({ sdk, chatId, context, format }) => {
 	try {
 		if (!context) {
 			sdk.sendText(chatId, `Кажется ты ничего не написал`);
 
 			return;
 		}
-		appendReportFileForClient(chatId, context, true);
+		appendReportFileForClient(chatId, context, normalizeFormat(format), true);
 	} catch (error) {
 		sdk.sendText(MASTER_CHAT_ID, `⚙️ У ${chatId} что-то пошло не так\n${error}`);
 		sdk.sendText(chatId, `Что-то пошло не так( уже сообщил об этом администратору бота.`);
@@ -429,7 +439,8 @@ async function sendHtmlReport(chatId, html) {
 
 const report = async ({ sdk, chatId }) => {
 	const list = Object.entries(getReportFile())
-		.filter(([key, value]) => Boolean(value));
+		.map(([key, value]) => [key, normalizeReportEntry(value)])
+		.filter(([key, value]) => Boolean(value.text));
 
 	if (!list.length) {
 		sdk.sendText(chatId, `⚙️ Никто ничего не написал`);
@@ -437,23 +448,32 @@ const report = async ({ sdk, chatId }) => {
 		return;
 	}
 
-	// Текстовая сводка (как было): кто заполнил и что написал
-	let text = `Заполнили отчёт: ${list.length} / ${IDs.length}\n\n`;
-	text += list
-		.map(([chatId, text]) => [getSlavicName(chatId), text])
-		.sort(([a], [b]) => a > b ? 1 : -1)
-		.map(([chatId, text]) => `${chatId}\n${text}`)
-		.join('\n\n');
+	// Текстовая сводка (как было): кто заполнил и что написал.
+	// Ссылки делаем кликабельными через format (VK Teams поддерживает форматирование).
+	const parts = [{ text: `Заполнили отчёт: ${list.length} / ${IDs.length}\n\n`, format: undefined }];
+	const sortedEntries = list
+		.map(([chatId, entry]) => [getSlavicName(chatId), entry])
+		.sort(([a], [b]) => (a > b ? 1 : -1));
 
-	await sdk.sendText(chatId, text);
+	sortedEntries.forEach(([name, entry], index) => {
+		parts.push({ text: `${name}\n`, format: undefined });
+		parts.push({ text: entry.text, format: entry.format });
+		if (index < sortedEntries.length - 1) {
+			parts.push({ text: '\n\n', format: undefined });
+		}
+	});
+
+	const summary = buildFormatted(parts);
+	const summaryFormat = formatFromObject(summary.format);
+	await sdk.sendText(chatId, summary.text, summaryFormat ? { format: summaryFormat } : {});
 
 	// Собираем упомянутые в отчётах номера задач (числа > 1000 -> VKPL-<num>),
 	// чтобы подставить по ним подробности из Jira в HTML-отчёт.
 	const mentionedByChat = {};
 	const mentionedKeys = [];
 
-	for (const [reportChatId, reportText] of list) {
-		const keys = uniq(extractNumbers(reportText)
+	for (const [reportChatId, entry] of list) {
+		const keys = uniq(extractNumbers(entry.text)
 			.filter((num) => num > 1000)
 			.map((num) => `VKPL-${num}`));
 
@@ -497,7 +517,7 @@ const report = async ({ sdk, chatId }) => {
 
 	// Отправляем HTML-отчёт файлом
 	const reports = list
-		.map(([chatId, reportText]) => ({ chatId, name: getSlavicName(chatId), text: reportText }))
+		.map(([chatId, entry]) => ({ chatId, name: getSlavicName(chatId), text: entry.text, format: entry.format }))
 		.sort((a, b) => a.name > b.name ? 1 : -1);
 
 	try {

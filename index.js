@@ -466,13 +466,14 @@ const buildReportData = async () => {
 	}
 
 	// Флаг включения запросов к Jira перед генерацией отчёта.
-	// JIRA_ENABLED=false отключает запросы (в HTML-отчёте не будет подробностей по задачам).
+	// JIRA_ENABLED=false отключает запросы: в HTML-отчёте будут только ссылки
+	// на упомянутые задачи, без подробностей из Jira.
 	const jiraEnabled = process.env.JIRA_ENABLED !== 'false';
 
-	// Получаем детали из Jira для всех упомянутых задач.
-	// Отдельные ошибки не должны ронять формирование отчёта.
 	const tasksByChat = {};
-	if (mentionedKeys.length && jiraEnabled) {
+	if (jiraEnabled && mentionedKeys.length) {
+		// Получаем детали из Jira для всех упомянутых задач.
+		// Отдельные ошибки не должны ронять формирование отчёта.
 		const uniqKeys = uniq(mentionedKeys);
 		const tasksData = await Promise.all(
 			uniqKeys.map(async (key) => {
@@ -498,6 +499,11 @@ const buildReportData = async () => {
 			tasksByChat[reportChatId] = keys
 				.filter((key) => byKey[key])
 				.map((key) => byKey[key]);
+		}
+	} else {
+		// Jira отключён (или задач не упомянуто) — оставляем только ссылки на задачи.
+		for (const [reportChatId, keys] of Object.entries(mentionedByChat)) {
+			tasksByChat[reportChatId] = keys.map((key) => ({ issueKey: key }));
 		}
 	}
 

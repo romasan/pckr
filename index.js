@@ -483,10 +483,14 @@ const report = async ({ sdk, chatId }) => {
 		}
 	}
 
+	// Флаг включения запросов к Jira перед генерацией отчёта.
+	// JIRA_ENABLED=false отключает запросы (в HTML-отчёте не будет подробностей по задачам).
+	const jiraEnabled = process.env.JIRA_ENABLED !== 'false';
+
 	// Получаем детали из Jira для всех упомянутых задач.
 	// Отдельные ошибки не должны ронять формирование отчёта.
 	const tasksByChat = {};
-	if (mentionedKeys.length) {
+	if (mentionedKeys.length && jiraEnabled) {
 		const uniqKeys = uniq(mentionedKeys);
 		const tasksData = await Promise.all(
 			uniqKeys.map(async (key) => {

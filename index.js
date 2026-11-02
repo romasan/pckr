@@ -1,5 +1,6 @@
 const { Bot, Format } = require('vkwrksps-bot');
 const fs = require('fs');
+const http = require('http');
 
 // Не даём процессу упасть из-за необработанных ошибок
 process.on('unhandledRejection', (error) => {
@@ -437,35 +438,16 @@ async function sendHtmlReport(chatId, html) {
 	return res.data;
 }
 
-const report = async ({ sdk, chatId }) => {
+// Собирает данные для отчёта: список заполнивших, упомянутые задачи из Jira
+// и готовую структуру для HTML. Используется и командой /report, и веб-сервером по /report.
+const buildReportData = async () => {
 	const list = Object.entries(getReportFile())
 		.map(([key, value]) => [key, normalizeReportEntry(value)])
 		.filter(([key, value]) => Boolean(value.text));
 
-	if (!list.length) {
-		sdk.sendText(chatId, `⚙️ Никто ничего не написал`);
-
-		return;
-	}
-
-	// Текстовая сводка (как было): кто заполнил и что написал.
-	// Ссылки делаем кликабельными через format (VK Teams поддерживает форматирование).
-	const parts = [{ text: `Заполнили отчёт: ${list.length} / ${IDs.length}\n\n`, format: undefined }];
-	const sortedEntries = list
-		.map(([chatId, entry]) => [getSlavicName(chatId), entry])
-		.sort(([a], [b]) => (a > b ? 1 : -1));
-
-	sortedEntries.forEach(([name, entry], index) => {
-		parts.push({ text: `${name}\n`, format: undefined });
-		parts.push({ text: entry.text, format: entry.format });
-		if (index < sortedEntries.length - 1) {
-			parts.push({ text: '\n\n', format: undefined });
-		}
-	});
-
-	const summary = buildFormatted(parts);
-	const summaryFormat = formatFromObject(summary.format);
-	await sdk.sendText(chatId, summary.text, summaryFormat ? { format: summaryFormat } : {});
+	const reports = list
+		.map(([chatId, entry]) => ({ chatId, name: getSlavicName(chatId), text: entry.text, format: entry.format }))
+		.sort((a, b) => a.name > b.name ? 1 : -1);
 
 	// Собираем упомянутые в отчётах номера задач (числа > 1000 -> VKPL-<num>),
 	// чтобы подставить по ним подробности из Jira в HTML-отчёт.
@@ -519,22 +501,88 @@ const report = async ({ sdk, chatId }) => {
 		}
 	}
 
-	// Отправляем HTML-отчёт файлом
-	const reports = list
-		.map(([chatId, entry]) => ({ chatId, name: getSlavicName(chatId), text: entry.text, format: entry.format }))
-		.sort((a, b) => a.name > b.name ? 1 : -1);
+	return {
+		list,
+		reports,
+		total: IDs.length,
+		tasksByChat,
+		jiraUrl: process.env.JIRA_URL || '',
+	};
+};
 
+const report = async ({ sdk, chatId }) => {
+	const { list, reports, total, tasksByChat, jiraUrl } = await buildReportData();
+
+	if (!list.length) {
+		sdk.sendText(chatId, `⚙️ Никто ничего не написал`);
+
+		return;
+	}
+
+	// Текстовая сводка (как было): кто заполнил и что написал.
+	// Ссылки делаем кликабельными через format (VK Teams поддерживает форматирование).
+	const parts = [{ text: `Заполнили отчёт: ${list.length} / ${IDs.length}\n\n`, format: undefined }];
+	const sortedEntries = list
+		.map(([chatId, entry]) => [getSlavicName(chatId), entry])
+		.sort(([a], [b]) => (a > b ? 1 : -1));
+
+	sortedEntries.forEach(([name, entry], index) => {
+		parts.push({ text: `${name}\n`, format: undefined });
+		parts.push({ text: entry.text, format: entry.format });
+		if (index < sortedEntries.length - 1) {
+			parts.push({ text: '\n\n', format: undefined });
+		}
+	});
+
+	const summary = buildFormatted(parts);
+	const summaryFormat = formatFromObject(summary.format);
+	await sdk.sendText(chatId, summary.text, summaryFormat ? { format: summaryFormat } : {});
+
+	// Отправляем HTML-отчёт файлом
 	try {
-		await sendHtmlReport(chatId, generateHtml({
-			reports,
-			total: IDs.length,
-			tasksByChat,
-			jiraUrl: process.env.JIRA_URL || '',
-		}));
+		await sendHtmlReport(chatId, generateHtml({ reports, total, tasksByChat, jiraUrl }));
 	} catch (fileError) {
 		console.error('Не удалось отправить HTML-отчёт:', fileError?.message || fileError);
 		sdk.sendText(chatId, `⚠️ Не удалось прикрепить HTML-отчёт: ${fileError?.message || fileError}`);
 	}
+};
+
+// Веб-сервер: по GET /report отдаёт тот же HTML-отчёт, что и команда /report.
+// Порт берётся из WEB_PORT в .env; если флаг не задан, сервер не запускается.
+const startWebServer = () => {
+	const port = Number(process.env.WEB_PORT);
+
+	if (!port) {
+		console.log('WEB_PORT не задан — веб-сервер не запущен');
+		return;
+	}
+
+	const server = http.createServer(async (req, res) => {
+		const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+
+		if (req.method === 'GET' && url.pathname === '/report') {
+			try {
+				const { reports, total, tasksByChat, jiraUrl } = await buildReportData();
+				const html = generateHtml({ reports, total, tasksByChat, jiraUrl });
+
+				res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+				res.end(html);
+			} catch (error) {
+				console.error('Ошибка генерации веб-отчёта:', error?.message || error);
+				res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+				res.end('Internal Server Error');
+			}
+
+			return;
+		}
+
+		res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+		res.end('Not Found');
+	});
+
+	server.listen(port, () => {
+		console.log(`Веб-сервер отчёта запущен: http://localhost:${port}/report`);
+	});
 };
 
 const members = async ({ sdk, chatId, context }) => {
@@ -656,6 +704,9 @@ const init = () => {
 	});
 
 	sdk.startPolling();
+
+	// Веб-сервер с HTML-отчётом по GET /report.
+	startWebServer();
 }
 
 init();
